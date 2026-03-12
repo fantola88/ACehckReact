@@ -2,15 +2,17 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Picker } from '@react-native-picker/picker';
 import { Stack, useRouter } from 'expo-router';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Alert,
   FlatList,
+  Modal,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
-  View
+  View,
 } from 'react-native';
 
 // Componentes
@@ -29,9 +31,10 @@ import { useSound } from '../../hooks/useSound';
 
 // Data e Utils
 import { getProdutosByAlmox } from '../../data/produtos';
-import type { Inventariante, ItemInventario, Produto } from '../../data/types';
+import type { Inventariante, ItemInventario, Produto, Relatorio } from '../../data/types';
 import { colors } from '../../styles/colors';
 import { calcularContagem, validarCamposContagem } from '../../utils/calculos';
+import { removerAcentos } from '../../utils/stringUtils';
 
 const ALMOXARIFADOS = [
   { label: 'Almoxarifado Central', value: 'Almoxarifado Central' },
@@ -41,35 +44,29 @@ const ALMOXARIFADOS = [
   { label: 'Almoxarifado de Produtos Gráficos', value: 'Almoxarifado de Produtos Gráficos' },
 ];
 
-const ITENS_POR_PAGINA = 25;
-
 export default function ContagemScreen() {
   const router = useRouter();
   const [almoxarifado, setAlmoxarifado] = useState(ALMOXARIFADOS[0].value);
   
   const { inventariantes, selectedInventariante, selectInventariante } = useInventariantes();
-  const { relatorioAtivo, addItem } = useRelatorio();
+  const { relatorios, relatorioAtivo, addItem } = useRelatorio();
   const { efeitosSonoros, avisosVisuais } = usePreferencias();
   const { playSuccessSound, playErrorSound } = useSound();
+
+  // Estado para o relatório selecionado
+  const [relatorioSelecionado, setRelatorioSelecionado] = useState<Relatorio | null>(null);
+  const [showRelatorioSelector, setShowRelatorioSelector] = useState(false);
 
   // Estados para Inventariante
   const [inventarianteText, setInventarianteText] = useState('');
   const [showInventarianteList, setShowInventarianteList] = useState(false);
   const [inventariantesFiltrados, setInventariantesFiltrados] = useState<Inventariante[]>([]);
-  const [inventarianteFocused, setInventarianteFocused] = useState(false);
 
   // Estados para Produto
   const [produtoText, setProdutoText] = useState('');
   const [showProdutoList, setShowProdutoList] = useState(false);
   const [produtosFiltrados, setProdutosFiltrados] = useState<any[]>([]);
-  const [produtosExibidos, setProdutosExibidos] = useState<any[]>([]);
   const [selectedProduto, setSelectedProduto] = useState<Produto | null>(null);
-  const [produtoFocused, setProdutoFocused] = useState(false);
-  const [produtoPage, setProdutoPage] = useState(1);
-  
-  // Refs para os inputs
-  const inventarianteInputRef = useRef<any>(null);
-  const produtoInputRef = useRef<any>(null);
   
   // Campos do produto
   const [codSpalm, setCodSpalm] = useState('');
@@ -98,28 +95,15 @@ export default function ContagemScreen() {
   const [obsVal, setObsVal] = useState('');
   const [showObsVal, setShowObsVal] = useState(false);
 
-  // Verificar se há relatório ativo
+  // Inicializar com o relatório ativo se existir
   useEffect(() => {
-    if (!relatorioAtivo) {
-      if (efeitosSonoros) {
-        playErrorSound();
-      }
-      if (avisosVisuais) {
-        Alert.alert(
-          'Nenhum relatório ativo',
-          'Crie um novo relatório na aba "Relatórios" antes de começar a contagem.',
-          [
-            {
-              text: 'OK',
-              onPress: () => router.push('/(tabs)/relatorios'),
-            },
-          ]
-        );
-      } else {
-        router.push('/(tabs)/relatorios');
-      }
+    if (relatorioAtivo && !relatorioSelecionado) {
+      setRelatorioSelecionado(relatorioAtivo);
     }
-  }, [relatorioAtivo, efeitosSonoros, avisosVisuais]);
+  }, [relatorioAtivo]);
+
+  // Filtrar apenas relatórios em andamento para seleção
+  const relatoriosEmAndamento = relatorios.filter(r => r.status === 'em_andamento');
 
   // Inicializar com inventariante selecionado
   useEffect(() => {
@@ -133,47 +117,47 @@ export default function ContagemScreen() {
     calcular();
   }, [qtdPaletes, cxPorPalete, cxAvulsas, unidPorCx, unidAvulsas, avulsosExp, saldoSpalm]);
 
-  // FILTRO DE INVENTARIANTE - só mostra quando o input está focado
-  useEffect(() => {
-    if (inventarianteFocused && inventarianteText.length >= 2) {
-      const filtrados = inventariantes.filter(inv => 
-        inv.nome.toLowerCase().includes(inventarianteText.toLowerCase()) ||
-        inv.cargo?.toLowerCase().includes(inventarianteText.toLowerCase())
-      );
-      setInventariantesFiltrados(filtrados.slice(0, ITENS_POR_PAGINA));
-      setShowInventarianteList(filtrados.length > 0);
-    } else {
+  // FILTRO DE INVENTARIANTE - SEM ACENTOS
+  const filtrarInventariantes = (texto: string) => {
+    if (texto.length === 0) {
+      setInventariantesFiltrados([]);
       setShowInventarianteList(false);
+      return;
     }
-  }, [inventarianteText, inventariantes, inventarianteFocused]);
-
-  // FILTRO DE PRODUTO - só mostra quando o input está focado
-  useEffect(() => {
-    if (produtoFocused && produtoText.length >= 2) {
-      const produtos = getProdutosByAlmox(almoxarifado);
-      const filtrados = produtos.filter(p => 
-        p.cod.toLowerCase().includes(produtoText.toLowerCase()) ||
-        p.nome.toLowerCase().includes(produtoText.toLowerCase())
-      );
-      setProdutosFiltrados(filtrados);
-      setProdutosExibidos(filtrados.slice(0, ITENS_POR_PAGINA));
-      setProdutoPage(1);
-      setShowProdutoList(filtrados.length > 0);
-    } else {
-      setShowProdutoList(false);
-    }
-  }, [produtoText, almoxarifado, produtoFocused]);
-
-  const carregarMaisProdutos = () => {
-    const proximaPagina = produtoPage + 1;
-    const inicio = produtoPage * ITENS_POR_PAGINA;
-    const fim = proximaPagina * ITENS_POR_PAGINA;
-    const novosItens = produtosFiltrados.slice(inicio, fim);
     
-    if (novosItens.length > 0) {
-      setProdutosExibidos(prev => [...prev, ...novosItens]);
-      setProdutoPage(proximaPagina);
+    const textoBusca = removerAcentos(texto.toLowerCase());
+    
+    const filtrados = inventariantes.filter(inv => {
+      const nome = removerAcentos(inv.nome.toLowerCase());
+      const cargo = inv.cargo ? removerAcentos(inv.cargo.toLowerCase()) : '';
+      
+      return nome.includes(textoBusca) || cargo.includes(textoBusca);
+    });
+    
+    setInventariantesFiltrados(filtrados.slice(0, 25));
+    setShowInventarianteList(filtrados.length > 0);
+  };
+
+  // FILTRO DE PRODUTO - SEM ACENTOS
+  const filtrarProdutos = (texto: string) => {
+    if (texto.length === 0) {
+      setProdutosFiltrados([]);
+      setShowProdutoList(false);
+      return;
     }
+    
+    const textoBusca = removerAcentos(texto.toLowerCase());
+    
+    const produtos = getProdutosByAlmox(almoxarifado);
+    const filtrados = produtos.filter(p => {
+      const codigo = removerAcentos(p.cod.toLowerCase());
+      const nome = removerAcentos(p.nome.toLowerCase());
+      
+      return codigo.includes(textoBusca) || nome.includes(textoBusca);
+    });
+    
+    setProdutosFiltrados(filtrados.slice(0, 25));
+    setShowProdutoList(filtrados.length > 0);
   };
 
   const calcular = () => {
@@ -197,8 +181,6 @@ export default function ContagemScreen() {
     setInventarianteText(inventariante.nome);
     selectInventariante(inventariante);
     setShowInventarianteList(false);
-    setInventarianteFocused(false);
-    inventarianteInputRef.current?.blur();
   };
 
   const handleSelectProduto = (produto: any) => {
@@ -208,8 +190,15 @@ export default function ContagemScreen() {
     setNomeItem(produto.nome);
     setUnidadeMedida(produto.unid);
     setShowProdutoList(false);
-    setProdutoFocused(false);
-    produtoInputRef.current?.blur();
+  };
+
+  const handleSelectRelatorio = (relatorio: Relatorio) => {
+    setRelatorioSelecionado(relatorio);
+    setShowRelatorioSelector(false);
+    
+    if (avisosVisuais) {
+      Alert.alert('Relatório selecionado', `Contagem será adicionada ao relatório: ${relatorio.titulo}`);
+    }
   };
 
   const limparCampos = () => {
@@ -234,14 +223,20 @@ export default function ContagemScreen() {
   };
 
   const salvarNoRelatorio = async () => {
-    if (!relatorioAtivo) {
+    if (!relatorioSelecionado) {
       if (efeitosSonoros) {
         await playErrorSound();
       }
-      if (avisosVisuais) {
-        Alert.alert('Erro', 'Nenhum relatório ativo');
-      }
-      router.push('/(tabs)/relatorios');
+      Alert.alert(
+        'Nenhum relatório selecionado',
+        'Selecione um relatório para adicionar a contagem.',
+        [
+          {
+            text: 'OK',
+            onPress: () => setShowRelatorioSelector(true),
+          },
+        ]
+      );
       return;
     }
 
@@ -316,11 +311,11 @@ export default function ContagemScreen() {
       },
       observacaoGeral: situacaoTexto,
       dataRegistro: new Date().toISOString(),
-      userId: relatorioAtivo.userId,
+      userId: relatorioSelecionado.userId,
     };
 
     try {
-      await addItem(relatorioAtivo.id, novoItem);
+      await addItem(relatorioSelecionado.id, novoItem);
       
       if (efeitosSonoros) {
         await playSuccessSound();
@@ -350,30 +345,16 @@ export default function ContagemScreen() {
     }
   };
 
-  const renderProdutoFooter = () => {
-    if (produtosExibidos.length < produtosFiltrados.length) {
-      return (
-        <TouchableOpacity
-          style={styles.loadMoreButton}
-          onPress={carregarMaisProdutos}
-        >
-          <Text style={styles.loadMoreText}>Carregar mais...</Text>
-        </TouchableOpacity>
-      );
-    }
-    return null;
-  };
-
   return (
     <>
-      <Stack.Screen options={{ title: 'Contagem' }} />
+      <Stack.Screen options={{ title: 'Inventário' }} />
       <View style={{ flex: 1, backgroundColor: colors.bg }}>
         <ScrollView 
           style={styles.scrollView}
           contentContainerStyle={styles.contentContainer}
           showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
         >
-
           {/* Seleção de Almoxarifado */}
           <Card>
             <Text style={styles.sectionTitle}>ALMOXARIFADO</Text>
@@ -390,20 +371,36 @@ export default function ContagemScreen() {
             </View>
           </Card>
 
-          {/* Informação do Relatório Ativo */}
-          {relatorioAtivo && (
-            <Card variant="cadastro" style={styles.relatorioAtivoCard}>
-              <View style={styles.relatorioAtivoHeader}>
-                <Ionicons name="document-text" size={20} color={colors.accent} />
-                <Text style={styles.relatorioAtivoTitulo} numberOfLines={1}>
-                  {relatorioAtivo.titulo}
-                </Text>
+          {/* Seleção de Relatório */}
+          <Card>
+            <Text style={styles.sectionTitle}>RELATÓRIO</Text>
+            
+            <TouchableOpacity
+              style={styles.relatorioSelector}
+              onPress={() => setShowRelatorioSelector(true)}
+            >
+              <View style={styles.relatorioSelectorContent}>
+                <Ionicons name="document-text-outline" size={24} color={colors.primary} />
+                <View style={styles.relatorioSelectorText}>
+                  <Text style={styles.relatorioSelectorLabel}>
+                    {relatorioSelecionado ? relatorioSelecionado.titulo : 'Selecione um relatório'}
+                  </Text>
+                  {relatorioSelecionado && (
+                    <Text style={styles.relatorioSelectorSubtitle}>
+                      {relatorioSelecionado.almoxarifado} • {relatorioSelecionado.totalItens} itens
+                    </Text>
+                  )}
+                </View>
+                <Ionicons name="chevron-down" size={20} color={colors.gray} />
               </View>
-              <Text style={styles.relatorioAtivoInfo}>
-                {relatorioAtivo.almoxarifado} • {relatorioAtivo.totalItens} itens
+            </TouchableOpacity>
+
+            {relatorioSelecionado && relatorioSelecionado.status !== 'em_andamento' && (
+              <Text style={styles.warningText}>
+                ⚠️ Este relatório não está em andamento. Você não poderá adicionar itens.
               </Text>
-            </Card>
-          )}
+            )}
+          </Card>
 
           {/* Card de Inventário */}
           <Card>
@@ -411,43 +408,36 @@ export default function ContagemScreen() {
             
             {/* Input de Inventariante com filtro dinâmico */}
             <View style={styles.searchContainer}>
-              <TouchableOpacity 
-                activeOpacity={1}
-                onPress={() => inventarianteInputRef.current?.focus()}
-              >
-                <InputField
-                  ref={inventarianteInputRef}
-                  placeholder="Digite o nome do inventariante..."
-                  value={inventarianteText}
-                  onChangeText={setInventarianteText}
-                  onFocus={() => setInventarianteFocused(true)}
-                  onBlur={() => {
-                    setTimeout(() => {
-                      setInventarianteFocused(false);
-                      setShowInventarianteList(false);
-                    }, 200);
-                  }}
-                />
-              </TouchableOpacity>
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Digite o nome do inventariante..."
+                placeholderTextColor={colors.lightGray}
+                value={inventarianteText}
+                onChangeText={(text) => {
+                  setInventarianteText(text);
+                  filtrarInventariantes(text);
+                }}
+                onFocus={() => {
+                  if (inventarianteText.length > 0) {
+                    filtrarInventariantes(inventarianteText);
+                  }
+                }}
+              />
               
               {showInventarianteList && (
                 <View style={styles.dropdownList}>
-                  <FlatList
-                    data={inventariantesFiltrados}
-                    keyExtractor={(item) => item.id}
-                    keyboardShouldPersistTaps="handled"
-                    renderItem={({ item }) => (
-                      <TouchableOpacity
-                        style={styles.dropdownItem}
-                        onPress={() => handleSelectInventariante(item)}
-                      >
-                        <Text style={styles.dropdownItemTitle}>{item.nome}</Text>
-                        {item.cargo && (
-                          <Text style={styles.dropdownItemSubtitle}>{item.cargo}</Text>
-                        )}
-                      </TouchableOpacity>
-                    )}
-                  />
+                  {inventariantesFiltrados.map((item) => (
+                    <TouchableOpacity
+                      key={item.id}
+                      style={styles.dropdownItem}
+                      onPress={() => handleSelectInventariante(item)}
+                    >
+                      <Text style={styles.dropdownItemTitle}>{item.nome}</Text>
+                      {item.cargo && (
+                        <Text style={styles.dropdownItemSubtitle}>{item.cargo}</Text>
+                      )}
+                    </TouchableOpacity>
+                  ))}
                 </View>
               )}
             </View>
@@ -456,42 +446,34 @@ export default function ContagemScreen() {
             
             {/* Input de Produto com filtro dinâmico */}
             <View style={styles.searchContainer}>
-              <TouchableOpacity 
-                activeOpacity={1}
-                onPress={() => produtoInputRef.current?.focus()}
-              >
-                <InputField
-                  ref={produtoInputRef}
-                  placeholder="Digite código ou descrição do produto..."
-                  value={produtoText}
-                  onChangeText={setProdutoText}
-                  onFocus={() => setProdutoFocused(true)}
-                  onBlur={() => {
-                    setTimeout(() => {
-                      setProdutoFocused(false);
-                      setShowProdutoList(false);
-                    }, 200);
-                  }}
-                />
-              </TouchableOpacity>
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Digite código ou descrição do produto..."
+                placeholderTextColor={colors.lightGray}
+                value={produtoText}
+                onChangeText={(text) => {
+                  setProdutoText(text);
+                  filtrarProdutos(text);
+                }}
+                onFocus={() => {
+                  if (produtoText.length > 0) {
+                    filtrarProdutos(produtoText);
+                  }
+                }}
+              />
               
               {showProdutoList && (
                 <View style={styles.dropdownList}>
-                  <FlatList
-                    data={produtosExibidos}
-                    keyExtractor={(item) => item.cod}
-                    keyboardShouldPersistTaps="handled"
-                    renderItem={({ item }) => (
-                      <TouchableOpacity
-                        style={styles.dropdownItem}
-                        onPress={() => handleSelectProduto(item)}
-                      >
-                        <Text style={styles.dropdownItemTitle}>{item.cod}</Text>
-                        <Text style={styles.dropdownItemSubtitle}>{item.nome}</Text>
-                      </TouchableOpacity>
-                    )}
-                    ListFooterComponent={renderProdutoFooter}
-                  />
+                  {produtosFiltrados.map((item) => (
+                    <TouchableOpacity
+                      key={item.cod}
+                      style={styles.dropdownItem}
+                      onPress={() => handleSelectProduto(item)}
+                    >
+                      <Text style={styles.dropdownItemTitle}>{item.cod}</Text>
+                      <Text style={styles.dropdownItemSubtitle}>{item.nome}</Text>
+                    </TouchableOpacity>
+                  ))}
                 </View>
               )}
             </View>
@@ -632,10 +614,64 @@ export default function ContagemScreen() {
               title="ADICIONAR AO RELATÓRIO"
               onPress={salvarNoRelatorio}
               style={styles.addButtonFull}
+              disabled={relatorioSelecionado?.status !== 'em_andamento'}
             />
           </Card>
         </ScrollView>
       </View>
+
+      {/* Modal de Seleção de Relatório */}
+      <Modal visible={showRelatorioSelector} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Selecionar Relatório</Text>
+              <TouchableOpacity onPress={() => setShowRelatorioSelector(false)}>
+                <Ionicons name="close" size={24} color={colors.gray} />
+              </TouchableOpacity>
+            </View>
+
+            {relatoriosEmAndamento.length === 0 ? (
+              <View style={styles.emptyContainer}>
+                <Ionicons name="document-text-outline" size={48} color={colors.lightGray} />
+                <Text style={styles.emptyTitle}>Nenhum relatório em andamento</Text>
+                <Text style={styles.emptyText}>
+                  Crie um novo relatório na aba "Relatórios"
+                </Text>
+                <Button
+                  title="Ir para Relatórios"
+                  variant="primary"
+                  onPress={() => {
+                    setShowRelatorioSelector(false);
+                    router.push('/(tabs)/relatorios');
+                  }}
+                  style={styles.emptyButton}
+                />
+              </View>
+            ) : (
+              <FlatList
+                data={relatoriosEmAndamento}
+                keyExtractor={(item) => item.id}
+                renderItem={({ item }) => (
+                  <TouchableOpacity
+                    style={styles.relatorioItem}
+                    onPress={() => handleSelectRelatorio(item)}
+                  >
+                    <View style={styles.relatorioItemHeader}>
+                      <Ionicons name="document-text" size={20} color={colors.primary} />
+                      <Text style={styles.relatorioItemTitulo}>{item.titulo}</Text>
+                    </View>
+                    <Text style={styles.relatorioItemInfo}>
+                      {item.almoxarifado} • {item.totalItens} itens
+                    </Text>
+                  </TouchableOpacity>
+                )}
+                ItemSeparatorComponent={() => <View style={styles.separator} />}
+              />
+            )}
+          </View>
+        </View>
+      </Modal>
     </>
   );
 }
@@ -709,28 +745,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     textTransform: 'uppercase',
   },
-  relatorioAtivoCard: {
-    marginTop: -10,
-    marginBottom: 10,
-    padding: 12,
-  },
-  relatorioAtivoHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 4,
-  },
-  relatorioAtivoTitulo: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.accent,
-    flex: 1,
-  },
-  relatorioAtivoInfo: {
-    fontSize: 12,
-    color: colors.gray,
-    marginLeft: 28,
-  },
   addButtonFull: {
     marginTop: 16,
   },
@@ -739,16 +753,25 @@ const styles = StyleSheet.create({
     zIndex: 1000,
     marginBottom: 16,
   },
+  searchInput: {
+    borderWidth: 2,
+    borderColor: colors.lightGray,
+    borderRadius: 10,
+    padding: 12,
+    fontSize: 14,
+    backgroundColor: colors.white,
+    color: colors.text,
+  },
   dropdownList: {
     position: 'absolute',
-    top: 60,
+    top: 55,
     left: 0,
     right: 0,
     backgroundColor: colors.white,
     borderWidth: 2,
     borderColor: colors.lightGray,
     borderRadius: 10,
-    maxHeight: 300,
+    maxHeight: 200,
     zIndex: 2000,
     elevation: 5,
     shadowColor: '#000',
@@ -771,14 +794,106 @@ const styles = StyleSheet.create({
     color: colors.gray,
     marginTop: 2,
   },
-  loadMoreButton: {
+  relatorioSelector: {
+    borderWidth: 2,
+    borderColor: colors.lightGray,
+    borderRadius: 10,
+    backgroundColor: colors.white,
     padding: 12,
-    alignItems: 'center',
-    backgroundColor: colors.lighterGray,
   },
-  loadMoreText: {
-    fontSize: 12,
-    color: colors.primary,
+  relatorioSelectorContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  relatorioSelectorText: {
+    flex: 1,
+  },
+  relatorioSelectorLabel: {
+    fontSize: 16,
     fontWeight: '600',
+    color: colors.text,
+  },
+  relatorioSelectorSubtitle: {
+    fontSize: 12,
+    color: colors.gray,
+    marginTop: 2,
+  },
+  warningText: {
+    fontSize: 12,
+    color: colors.danger,
+    marginTop: 8,
+    fontStyle: 'italic',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    backgroundColor: colors.white,
+    borderRadius: 20,
+    padding: 20,
+    width: '90%',
+    maxHeight: '80%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  relatorioItem: {
+    padding: 16,
+    backgroundColor: colors.white,
+    borderRadius: 10,
+  },
+  relatorioItemHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 4,
+  },
+  relatorioItemTitulo: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.primary,
+    flex: 1,
+  },
+  relatorioItemInfo: {
+    fontSize: 12,
+    color: colors.gray,
+    marginLeft: 28,
+  },
+  separator: {
+    height: 1,
+    backgroundColor: colors.lightGray,
+    marginVertical: 8,
+  },
+  emptyContainer: {
+    alignItems: 'center',
+    padding: 32,
+  },
+  emptyTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.gray,
+    marginTop: 16,
+  },
+  emptyText: {
+    fontSize: 14,
+    color: colors.lightGray,
+    textAlign: 'center',
+    marginTop: 8,
+  },
+  emptyButton: {
+    marginTop: 20,
+    minWidth: 200,
   },
 });
