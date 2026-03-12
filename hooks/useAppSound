@@ -1,0 +1,122 @@
+// hooks/useAppSound.ts
+import { Audio } from 'expo-av';
+import { useEffect, useRef, useState } from 'react';
+import { usePreferencias } from '../contexts/PreferenciasContext';
+
+export function useAppSound() {
+  const { efeitosSonoros } = usePreferencias();
+  
+  const successSoundRef = useRef<Audio.Sound | null>(null);
+  const errorSoundRef = useRef<Audio.Sound | null>(null);
+  const [soundsLoaded, setSoundsLoaded] = useState(false);
+
+  // Carregar sons
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadSounds = async () => {
+      try {
+        console.log('🎵 Carregando sons no hook...');
+        
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: false,
+          playsInSilentModeIOS: true,
+          shouldDuckAndroid: true,
+        });
+
+        // Carregar som de sucesso
+        const { sound: success } = await Audio.Sound.createAsync(
+          require('../assets/sounds/success.mp3'),
+          { volume: 1.0 }
+        );
+        
+        // Carregar som de erro
+        const { sound: error } = await Audio.Sound.createAsync(
+          require('../assets/sounds/error.mp3'),
+          { volume: 1.0 }
+        );
+
+        if (isMounted) {
+          successSoundRef.current = success;
+          errorSoundRef.current = error;
+          setSoundsLoaded(true);
+          console.log('✅ Sons carregados no hook');
+        }
+      } catch (error) {
+        console.log('❌ Erro ao carregar sons:', error);
+      }
+    };
+
+    loadSounds();
+
+    return () => {
+      isMounted = false;
+      if (successSoundRef.current) {
+        successSoundRef.current.unloadAsync();
+        successSoundRef.current = null;
+      }
+      if (errorSoundRef.current) {
+        errorSoundRef.current.unloadAsync();
+        errorSoundRef.current = null;
+      }
+    };
+  }, []);
+
+  const playSuccess = async () => {
+    console.log('🎵 playSuccess chamado:', { 
+      efeitosSonoros, 
+      soundExists: !!successSoundRef.current,
+      soundsLoaded 
+    });
+    
+    if (!efeitosSonoros) {
+      console.log('🔇 Efeitos sonoros desativados');
+      return;
+    }
+    
+    if (!successSoundRef.current) {
+      console.log('⚠️ Som de sucesso não disponível');
+      return;
+    }
+
+    try {
+      await successSoundRef.current.setPositionAsync(0);
+      await successSoundRef.current.playAsync();
+      console.log('✅ Som de sucesso tocado');
+    } catch (error) {
+      console.log('❌ Erro ao tocar som de sucesso:', error);
+    }
+  };
+
+  const playError = async () => {
+    console.log('🎵 playError chamado:', { 
+      efeitosSonoros, 
+      soundExists: !!errorSoundRef.current,
+      soundsLoaded 
+    });
+    
+    if (!efeitosSonoros) {
+      console.log('🔇 Efeitos sonoros desativados');
+      return;
+    }
+    
+    if (!errorSoundRef.current) {
+      console.log('⚠️ Som de erro não disponível');
+      return;
+    }
+
+    try {
+      await errorSoundRef.current.setPositionAsync(0);
+      await errorSoundRef.current.playAsync();
+      console.log('✅ Som de erro tocado');
+    } catch (error) {
+      console.log('❌ Erro ao tocar som de erro:', error);
+    }
+  };
+
+  return {
+    playSuccess,
+    playError,
+    soundsLoaded,
+  };
+}
