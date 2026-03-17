@@ -5,13 +5,13 @@ import { FlashList } from '@shopify/flash-list';
 import { Stack } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    InteractionManager,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View
+  ActivityIndicator,
+  Alert,
+  InteractionManager,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View
 } from 'react-native';
 
 // Componentes
@@ -31,12 +31,14 @@ import { produtos } from '../../data/produtos';
 import type { Produto, UnidadeMedida } from '../../data/types';
 import { colors } from '../../styles/colors';
 
+// ATUALIZADO: Adicionado SPFR Papéis
 const ALMOXARIFADOS = [
   { label: 'Almoxarifado Central', value: 'Almoxarifado Central' },
   { label: 'Almoxarifado de Alimentícios', value: 'Almoxarifado de Alimentícios' },
   { label: 'Almoxarifado do Serviço Médico', value: 'Almoxarifado do Serviço Médico' },
   { label: 'Almoxarifado de Informática', value: 'Almoxarifado de Informática' },
   { label: 'Almoxarifado de Produtos Gráficos', value: 'Almoxarifado de Produtos Gráficos' },
+  { label: 'Almoxarifado SAPF Papéis', value: 'Almoxarifado SAPF Papéis' }, // NOVO
 ];
 
 const UNIDADES_MEDIDA: UnidadeMedida[] = [
@@ -176,7 +178,7 @@ export default function ItensScreen() {
       newErrors.nome = 'Descrição é obrigatória';
     }
     
-    const exists = produtos.some(
+    const exists = allProdutosRef.current.some(
       p => p.cod === codigo && p.almox === selectedAlmox && p.cod !== editingId
     );
     
@@ -208,16 +210,26 @@ export default function ItensScreen() {
       };
 
       if (editingId) {
-        const index = produtos.findIndex(p => p.cod === editingId && p.almox === selectedAlmox);
+        // Modo edição
+        const index = allProdutosRef.current.findIndex(
+          p => p.cod === editingId && p.almox === selectedAlmox
+        );
         if (index !== -1) {
-          produtos[index] = novoProduto;
+          allProdutosRef.current[index] = novoProduto;
+          
+          // Atualizar também no array original produtos (se necessário)
+          const originalIndex = produtos.findIndex(
+            p => p.cod === editingId && p.almox === selectedAlmox
+          );
+          if (originalIndex !== -1) {
+            produtos[originalIndex] = novoProduto;
+          }
         }
       } else {
+        // Modo novo
+        allProdutosRef.current.push(novoProduto);
         produtos.push(novoProduto);
       }
-
-      // Atualizar referência
-      allProdutosRef.current = [...produtos];
       
       // Recarregar lista
       filterByAlmoxarifado(selectedAlmox);
@@ -261,12 +273,21 @@ export default function ItensScreen() {
           text: 'Remover',
           style: 'destructive',
           onPress: async () => {
-            const index = produtos.findIndex(
+            // Remover da referência
+            const index = allProdutosRef.current.findIndex(
               p => p.cod === produto.cod && p.almox === produto.almox
             );
             if (index !== -1) {
-              produtos.splice(index, 1);
-              allProdutosRef.current = [...produtos];
+              allProdutosRef.current.splice(index, 1);
+              
+              // Remover do array original produtos
+              const originalIndex = produtos.findIndex(
+                p => p.cod === produto.cod && p.almox === produto.almox
+              );
+              if (originalIndex !== -1) {
+                produtos.splice(originalIndex, 1);
+              }
+              
               filterByAlmoxarifado(selectedAlmox);
               
               if (efeitosSonoros) {

@@ -1,11 +1,13 @@
 // app/relatorio/[id].tsx
 import { Ionicons } from '@expo/vector-icons';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  FlatList,
   Modal,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -30,39 +32,84 @@ import { getProdutosByAlmox } from '../../data/produtos';
 import { gerarExcel } from '../../services/excelService';
 import { gerarPDF } from '../../services/pdfService';
 import { colors } from '../../styles/colors';
-import { calcularContagem } from '../../utils/calculos';
+import { calcularContagem, validarCamposContagem } from '../../utils/calculos';
+import { removerAcentos } from '../../utils/stringUtils';
+
+// Componente de Card do Item memoizado
+const ItemCard = memo(({ produto, contado, onPress, onEdit, onDelete }) => {
+  return (
+    <TouchableOpacity
+      style={[styles.itemCard, contado && styles.itemCardContado]}
+      onPress={onPress}
+      activeOpacity={0.7}
+    >
+      <View style={styles.itemHeader}>
+        <View style={styles.itemInfo}>
+          <Text style={styles.itemCodigo}>{produto.cod}</Text>
+          {contado && (
+            <View style={styles.itemContadoBadge}>
+              <Ionicons name="checkmark-circle" size={16} color={colors.success} />
+              <Text style={styles.itemContadoText}>Contado</Text>
+            </View>
+          )}
+        </View>
+
+        <View style={styles.itemActions}>
+          {contado && (
+            <TouchableOpacity onPress={onEdit} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <Ionicons name="create-outline" size={20} color={colors.primary} />
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity onPress={onDelete} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+            <Ionicons name="trash-outline" size={20} color={colors.danger} />
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      <Text style={styles.itemNome}>{produto.nome}</Text>
+      <Text style={styles.itemUnidade}>Unidade: {produto.unid}</Text>
+    </TouchableOpacity>
+  );
+}, (prevProps, nextProps) => {
+  return prevProps.contado === nextProps.contado && 
+         prevProps.produto.cod === nextProps.produto.cod;
+});
 
 export default function RelatorioDetalheScreen() {
   const { id } = useLocalSearchParams();
   const router = useRouter();
+  
+  // Contextos
   const {
     relatorios,
     loading: contextLoading,
     arquivarRelatorio,
+    desarquivarRelatorio,
     excluirRelatorio,
     addItem,
     updateItem,
     removeItem,
   } = useRelatorio();
 
-  const { avisosVisuais } = usePreferencias();
+  const { avisosVisuais, efeitosSonoros } = usePreferencias();
   const { playSuccessSound, playErrorSound } = useSound();
-  const [modalExportVisible, setModalExportVisible] = useState(false);
 
-  const [showResumo, setShowResumo] = useState(true);
+  // Estados principais
   const [relatorio, setRelatorio] = useState(null);
   const [loading, setLoading] = useState(true);
   const [editandoTitulo, setEditandoTitulo] = useState(false);
   const [novoTitulo, setNovoTitulo] = useState('');
 
-  // Estados para os itens do almoxarifado
+  // Dados
   const [itensAlmoxarifado, setItensAlmoxarifado] = useState([]);
-  const [carregandoItens, setCarregandoItens] = useState(false);
-  const [selectedCategoria, setSelectedCategoria] = useState('todos');
+  const [filtroStatus, setFiltroStatus] = useState(null);
+  const [pesquisaTexto, setPesquisaTexto] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
 
-  // Modal de contagem
+  // Modal
   const [modalVisible, setModalVisible] = useState(false);
-  const [modalMode, setModalMode] = useState<'novo' | 'editar'>('novo');
+  const [modalExportVisible, setModalExportVisible] = useState(false);
+  const [modalMode, setModalMode] = useState('novo');
   const [selectedProduto, setSelectedProduto] = useState(null);
   const [selectedItemId, setSelectedItemId] = useState(null);
 
@@ -74,7 +121,11 @@ export default function RelatorioDetalheScreen() {
   const [unidAvulsas, setUnidAvulsas] = useState('0');
   const [avulsosExp, setAvulsosExp] = useState('0');
   const [saldoSpalm, setSaldoSpalm] = useState('0');
+  
+  // Resultados
   const [totalGeral, setTotalGeral] = useState(0);
+  const [diferenca, setDiferenca] = useState(0);
+  const [situacao, setSituacao] = useState('AGUARDANDO');
 
   // Qualidade
   const [embStatus, setEmbStatus] = useState('OK');
@@ -84,57 +135,34 @@ export default function RelatorioDetalheScreen() {
   const [obsVal, setObsVal] = useState('');
   const [showObsVal, setShowObsVal] = useState(false);
 
-  // Efeito para encontrar o relatório na lista
+  // Refs para performance
+  const itensMapRef = useRef(new Map());
+  const listRef = useRef(null);
+
+  // Encontrar relatório
   useEffect(() => {
     const encontrado = relatorios.find(r => r.id === id);
-
     if (encontrado) {
       setRelatorio(encontrado);
       setNovoTitulo(encontrado.titulo);
+      
+      // Carregar itens do almoxarifado
+      const produtos = getProdutosByAlmox(encontrado.almoxarifado);
+      setItensAlmoxarifado(produtos);
+      
+      // Atualizar mapa de itens contados
+      const map = new Map();
+      encontrado.itens.forEach(item => map.set(item.codigo, true));
+      itensMapRef.current = map;
+      
       setLoading(false);
-
-      // Carregar itens do almoxarifado de forma ASSÍNCRONA
-      carregarItensAlmoxarifadoAsync(encontrado.almoxarifado);
     } else if (!contextLoading) {
-      const timer = setTimeout(() => {
-        const tentarNovamente = relatorios.find(r => r.id === id);
-        if (tentarNovamente) {
-          setRelatorio(tentarNovamente);
-          setNovoTitulo(tentarNovamente.titulo);
-          setLoading(false);
-          carregarItensAlmoxarifadoAsync(tentarNovamente.almoxarifado);
-        } else {
-          setLoading(false);
-        }
-      }, 300);
-
-      return () => clearTimeout(timer);
+      setLoading(false);
     }
   }, [id, relatorios, contextLoading]);
 
-  // Função para carregar itens de forma assíncrona
-  const carregarItensAlmoxarifadoAsync = useCallback(async (almoxarifado) => {
-    setCarregandoItens(true);
-
-    // Usar setTimeout para não bloquear a thread principal
-    setTimeout(() => {
-      const startTime = Date.now();
-      const produtos = getProdutosByAlmox(almoxarifado);
-      const endTime = Date.now();
-
-      console.log(`📦 ${produtos.length} itens carregados em ${endTime - startTime}ms`);
-
-      setItensAlmoxarifado(produtos);
-      setCarregandoItens(false);
-    }, 0);
-  }, []);
-
-  // Calcular total
+  // Calcular diferenças
   useEffect(() => {
-    calcular();
-  }, [qtdPaletes, cxPorPalete, cxAvulsas, unidPorCx, unidAvulsas, avulsosExp]);
-
-  const calcular = useCallback(() => {
     const params = {
       qtdPaletes: parseFloat(qtdPaletes) || 0,
       cxPorPalete: parseFloat(cxPorPalete) || 0,
@@ -147,239 +175,151 @@ export default function RelatorioDetalheScreen() {
 
     const resultado = calcularContagem(params);
     setTotalGeral(resultado.totalGeral);
-  }, [qtdPaletes, cxPorPalete, cxAvulsas, unidPorCx, unidAvulsas, avulsosExp]);
+    setDiferenca(resultado.diferenca);
+    setSituacao(resultado.situacao);
+  }, [qtdPaletes, cxPorPalete, cxAvulsas, unidPorCx, unidAvulsas, avulsosExp, saldoSpalm]);
 
-  const handleVoltar = useCallback(() => {
-    router.back();
-  }, []);
+  // Função para filtrar itens
+  const getItensFiltrados = useCallback(() => {
+    if (!itensAlmoxarifado.length || !relatorio) return [];
+    
+    let resultados = itensAlmoxarifado;
+    
+    if (filtroStatus !== null) {
+      resultados = resultados.filter(produto => {
+        const contado = itensMapRef.current.has(produto.cod);
+        return filtroStatus === true ? contado : !contado;
+      });
+    }
+    
+    if (pesquisaTexto.trim()) {
+      const textoBusca = removerAcentos(pesquisaTexto.toLowerCase().trim());
+      resultados = resultados.filter(produto => 
+        removerAcentos(produto.cod.toLowerCase()).includes(textoBusca) ||
+        removerAcentos(produto.nome.toLowerCase()).includes(textoBusca)
+      );
+    }
+    
+    return resultados;
+  }, [itensAlmoxarifado, relatorio, filtroStatus, pesquisaTexto]);
 
-  const handleEditarTitulo = useCallback(() => {
-    setEditandoTitulo(true);
-  }, []);
+  // Handlers
+  const handleVoltar = () => router.back();
 
-  const handleSalvarTitulo = useCallback(async () => {
+  const handleExportarPDF = async () => {
+    setModalExportVisible(false);
+    try {
+      await gerarPDF({
+        titulo: relatorio.titulo,
+        almoxarifado: relatorio.almoxarifado,
+        inventariante: relatorio.inventariante,
+        dataCriacao: relatorio.dataCriacao,
+        itens: relatorio.itens
+      });
+      if (playSuccessSound) await playSuccessSound();
+    } catch (error) {
+      Alert.alert('Erro', 'Não foi possível gerar o PDF');
+    }
+  };
+
+  const handleExportarExcel = async () => {
+    setModalExportVisible(false);
+    try {
+      await gerarExcel({
+        titulo: relatorio.titulo,
+        almoxarifado: relatorio.almoxarifado,
+        inventariante: relatorio.inventariante,
+        dataCriacao: relatorio.dataCriacao,
+        itens: relatorio.itens
+      });
+      if (playSuccessSound) await playSuccessSound();
+    } catch (error) {
+      Alert.alert('Erro', 'Não foi possível gerar o Excel');
+    }
+  };
+
+  const handleSalvarTitulo = async () => {
     if (!novoTitulo.trim()) {
       Alert.alert('Erro', 'O título não pode estar vazio');
       return;
     }
-
-    try {
-      // Aqui você precisa implementar a função de atualizar título no contexto
-      // await atualizarTituloRelatorio(relatorio.id, novoTitulo);
-
-      setEditandoTitulo(false);
-      if (playSuccessSound) await playSuccessSound();
-      if (avisosVisuais) Alert.alert('Sucesso', 'Título atualizado!');
-    } catch (error) {
-      if (playErrorSound) await playErrorSound();
-      Alert.alert('Erro', 'Não foi possível atualizar o título');
-    }
-  }, [novoTitulo, relatorio, playSuccessSound, playErrorSound, avisosVisuais]);
-
-  const handleCancelarEdicao = useCallback(() => {
     setEditandoTitulo(false);
-    setNovoTitulo(relatorio.titulo);
-  }, [relatorio]);
+    if (playSuccessSound) await playSuccessSound();
+  };
 
-  const handleExportarExcel = useCallback(async () => {
-    setModalExportVisible(false);
-
-    Alert.alert(
-      'Exportar Excel',
-      'Deseja gerar o relatório em Excel?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Gerar Excel',
-          onPress: async () => {
-            try {
-              setCarregandoItens(true);
-              const success = await gerarExcel({
-                titulo: relatorio.titulo,
-                almoxarifado: relatorio.almoxarifado,
-                inventariante: relatorio.inventariante,
-                dataCriacao: relatorio.dataCriacao,
-                itens: relatorio.itens
-              });
-
-              if (success && playSuccessSound) await playSuccessSound();
-            } catch (error) {
-              console.error('Erro ao exportar Excel:', error);
-              if (playErrorSound) await playErrorSound();
-              Alert.alert('Erro', 'Não foi possível gerar o Excel');
-            } finally {
-              setCarregandoItens(false);
-            }
-          },
-        },
-      ]
-    );
-  }, [relatorio, playSuccessSound, playErrorSound]);
-
-  const handleExportarPDF = useCallback(async () => {
-    setModalExportVisible(false);
-
-    Alert.alert(
-      'Exportar PDF',
-      'Deseja gerar o relatório em PDF?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Gerar PDF',
-          onPress: async () => {
-            try {
-              setCarregandoItens(true);
-              const success = await gerarPDF({
-                titulo: relatorio.titulo,
-                almoxarifado: relatorio.almoxarifado,
-                inventariante: relatorio.inventariante,
-                dataCriacao: relatorio.dataCriacao,
-                itens: relatorio.itens
-              });
-
-              if (success && playSuccessSound) await playSuccessSound();
-            } catch (error) {
-              console.error('Erro ao exportar PDF:', error);
-              if (playErrorSound) await playErrorSound();
-              Alert.alert('Erro', 'Não foi possível gerar o PDF');
-            } finally {
-              setCarregandoItens(false);
-            }
-          },
-        },
-      ]
-    );
-  }, [relatorio, playSuccessSound, playErrorSound]);
-
-  const handleArquivar = useCallback(() => {
-    Alert.alert(
-      'Arquivar Relatório',
-      'Deseja arquivar este relatório?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Arquivar',
-          onPress: async () => {
-            await arquivarRelatorio(relatorio.id);
-            if (playSuccessSound) await playSuccessSound();
-            if (avisosVisuais) Alert.alert('Sucesso', 'Relatório arquivado!');
-            router.back();
-          },
-        },
-      ]
-    );
-  }, [relatorio, arquivarRelatorio, router, playSuccessSound, avisosVisuais]);
-
-  const handleExcluir = useCallback(() => {
-    Alert.alert(
-      'Excluir Relatório',
-      'Tem certeza?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Excluir',
-          style: 'destructive',
-          onPress: async () => {
-            await excluirRelatorio(relatorio.id);
-            if (playSuccessSound) await playSuccessSound();
-            if (avisosVisuais) Alert.alert('Sucesso', 'Relatório excluído!');
-            router.back();
-          },
-        },
-      ]
-    );
-  }, [relatorio, excluirRelatorio, router, playSuccessSound, avisosVisuais]);
-
-  const handleNovoItem = useCallback((produto) => {
+  const handleContarItem = (produto) => {
     setSelectedProduto(produto);
     setModalMode('novo');
     setSelectedItemId(null);
 
     const itemExistente = relatorio?.itens.find(i => i.codigo === produto.cod);
     if (itemExistente) {
-      setQtdPaletes(itemExistente.fisico.paletes.toString());
-      setCxPorPalete('0');
-      setCxAvulsas(itemExistente.fisico.caixas.toString());
-      setUnidPorCx('1');
-      setUnidAvulsas(itemExistente.fisico.unidades.toString());
+      setQtdPaletes(itemExistente.fisico.paletes?.toString() || '0');
+      setCxPorPalete(itemExistente.fisico.caixasPorPalete?.toString() || '0');
+      setCxAvulsas(itemExistente.fisico.caixas?.toString() || '0');
+      setUnidPorCx(itemExistente.fisico.unidadesPorCaixa?.toString() || '1');
+      setUnidAvulsas(itemExistente.fisico.unidades?.toString() || '0');
       setAvulsosExp('0');
-      setSaldoSpalm(itemExistente.spalm.toString());
-      setEmbStatus(itemExistente.qualidade.embalagem === 'ok' ? 'OK' : 'AVARIA');
-      setObsEmb(itemExistente.qualidade.observacao || '');
-      setShowObsEmb(itemExistente.qualidade.embalagem !== 'ok');
-      setValStatus(itemExistente.qualidade.validade);
-      setObsVal(itemExistente.qualidade.observacao || '');
-      setShowObsVal(itemExistente.qualidade.validade !== 'OK');
+      setSaldoSpalm(itemExistente.spalm?.toString() || '0');
+      setEmbStatus(itemExistente.qualidade?.embalagem === 'ok' ? 'OK' : 'AVARIA');
+      setObsEmb(itemExistente.qualidade?.observacao || '');
+      setShowObsEmb(itemExistente.qualidade?.embalagem !== 'ok');
+      setValStatus(itemExistente.qualidade?.validade || 'OK');
+      setObsVal(itemExistente.qualidade?.observacao || '');
+      setShowObsVal(itemExistente.qualidade?.validade !== 'OK');
     } else {
       limparCampos();
     }
 
     setModalVisible(true);
-  }, [relatorio]);
+  };
 
-  const handleEditarItem = useCallback((item) => {
+  const handleEditarItem = (item) => {
     const produto = itensAlmoxarifado.find(p => p.cod === item.codigo);
+    if (!produto) return;
+    
     setSelectedProduto(produto);
     setModalMode('editar');
     setSelectedItemId(item.id);
 
-    setQtdPaletes(item.fisico.paletes.toString());
-    setCxPorPalete('0');
-    setCxAvulsas(item.fisico.caixas.toString());
-    setUnidPorCx('1');
-    setUnidAvulsas(item.fisico.unidades.toString());
+    setQtdPaletes(item.fisico.paletes?.toString() || '0');
+    setCxPorPalete(item.fisico.caixasPorPalete?.toString() || '0');
+    setCxAvulsas(item.fisico.caixas?.toString() || '0');
+    setUnidPorCx(item.fisico.unidadesPorCaixa?.toString() || '1');
+    setUnidAvulsas(item.fisico.unidades?.toString() || '0');
     setAvulsosExp('0');
-    setSaldoSpalm(item.spalm.toString());
-    setEmbStatus(item.qualidade.embalagem === 'ok' ? 'OK' : 'AVARIA');
-    setObsEmb(item.qualidade.observacao || '');
-    setShowObsEmb(item.qualidade.embalagem !== 'ok');
-    setValStatus(item.qualidade.validade);
-    setObsVal(item.qualidade.observacao || '');
-    setShowObsVal(item.qualidade.validade !== 'OK');
+    setSaldoSpalm(item.spalm?.toString() || '0');
+    setEmbStatus(item.qualidade?.embalagem === 'ok' ? 'OK' : 'AVARIA');
+    setObsEmb(item.qualidade?.observacao || '');
+    setShowObsEmb(item.qualidade?.embalagem !== 'ok');
+    setValStatus(item.qualidade?.validade || 'OK');
+    setObsVal(item.qualidade?.observacao || '');
+    setShowObsVal(item.qualidade?.validade !== 'OK');
 
     setModalVisible(true);
-  }, [itensAlmoxarifado]);
+  };
 
-  const handleRemoverItem = useCallback((produto, itemContado) => {
-    if (itemContado) {
-      // Se já foi contado, remove do relatório (Firestore)
-      Alert.alert(
-        'Remover Item',
-        `Deseja remover "${produto.nome}" do relatório?`,
-        [
-          { text: 'Cancelar', style: 'cancel' },
-          {
-            text: 'Remover',
-            style: 'destructive',
-            onPress: async () => {
-              await removeItem(relatorio.id, itemContado.id);
-              if (playSuccessSound) await playSuccessSound();
-            },
+  const handleRemoverItem = (produto, itemContado) => {
+    if (!itemContado) return;
+    
+    Alert.alert(
+      'Remover Item',
+      `Deseja remover "${produto.nome}" do relatório?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Remover',
+          style: 'destructive',
+          onPress: async () => {
+            await removeItem(relatorio.id, itemContado.id);
+            if (playSuccessSound) await playSuccessSound();
           },
-        ]
-      );
-    } else {
-      // Se NÃO foi contado, remove da lista LOCAL (só desta visualização)
-      Alert.alert(
-        'Remover Item da Lista',
-        `Deseja remover "${produto.nome}" da lista de itens? (Isto só afeta sua visualização atual)`,
-        [
-          { text: 'Cancelar', style: 'cancel' },
-          {
-            text: 'Remover',
-            style: 'destructive',
-            onPress: async () => {
-              // Remove da lista local
-              setItensAlmoxarifado(prev => prev.filter(p => p.cod !== produto.cod));
-              if (playSuccessSound) await playSuccessSound();
-            },
-          },
-        ]
-      );
-    }
-  }, [relatorio, removeItem, playSuccessSound]);
+        },
+      ]
+    );
+  };
 
-  const limparCampos = useCallback(() => {
+  const limparCampos = () => {
     setQtdPaletes('0');
     setCxPorPalete('0');
     setCxAvulsas('0');
@@ -393,25 +333,49 @@ export default function RelatorioDetalheScreen() {
     setValStatus('OK');
     setShowObsVal(false);
     setObsVal('');
-  }, []);
+  };
 
   const salvarItem = async () => {
     if (!selectedProduto) return;
 
+    const params = {
+      qtdPaletes: parseFloat(qtdPaletes) || 0,
+      cxPorPalete: parseFloat(cxPorPalete) || 0,
+      cxAvulsas: parseFloat(cxAvulsas) || 0,
+      unidPorCx: parseFloat(unidPorCx) || 1,
+      unidAvulsas: parseFloat(unidAvulsas) || 0,
+      avulsosExp: parseFloat(avulsosExp) || 0,
+      saldoSpalm: parseFloat(saldoSpalm) || 0,
+    };
+
+    const erros = validarCamposContagem(params);
+    if (erros.length > 0) {
+      Alert.alert('Erro de validação', erros.join('\n'));
+      return;
+    }
+
     const observacoes = [];
     if (showObsEmb && obsEmb) observacoes.push(`Embalagem: ${obsEmb}`);
     if (showObsVal && obsVal) observacoes.push(`Validade: ${obsVal}`);
+
+    const totalFisicoReal = 
+      (params.qtdPaletes * params.cxPorPalete * params.unidPorCx) + 
+      (params.cxAvulsas * params.unidPorCx) + 
+      params.unidAvulsas;
 
     const itemData = {
       codigo: selectedProduto.cod,
       nome: selectedProduto.nome,
       unidade: selectedProduto.unid,
       fisico: {
-        paletes: parseFloat(qtdPaletes) || 0,
-        caixas: (parseFloat(cxPorPalete) || 0) + (parseFloat(cxAvulsas) || 0),
-        unidades: parseFloat(unidAvulsas) || 0,
+        paletes: params.qtdPaletes,
+        caixasPorPalete: params.cxPorPalete,
+        caixas: params.cxAvulsas,
+        unidadesPorCaixa: params.unidPorCx,
+        unidades: params.unidAvulsas,
+        total: totalFisicoReal,
       },
-      spalm: parseFloat(saldoSpalm) || 0,
+      spalm: params.saldoSpalm,
       qualidade: {
         embalagem: embStatus === 'OK' ? 'ok' : 'danificada',
         validade: valStatus,
@@ -424,40 +388,217 @@ export default function RelatorioDetalheScreen() {
 
     try {
       if (modalMode === 'novo') {
-        await addItem(relatorio.id, itemData);
+        const itemExistente = relatorio.itens.find(i => i.codigo === selectedProduto.cod);
+        if (itemExistente) {
+          await updateItem(relatorio.id, itemExistente.id, itemData);
+        } else {
+          await addItem(relatorio.id, itemData);
+        }
       } else {
         await updateItem(relatorio.id, selectedItemId, itemData);
       }
 
+      // Atualizar o mapa
+      itensMapRef.current.set(selectedProduto.cod, true);
+      
       if (playSuccessSound) await playSuccessSound();
-
       setModalVisible(false);
       limparCampos();
     } catch (error) {
-      if (playErrorSound) await playErrorSound();
       Alert.alert('Erro', 'Não foi possível salvar o item');
     }
   };
 
-  const categorias = useMemo(() => [
-    { label: 'Todos', value: 'todos' },
-    { label: 'Contados', value: 'contados' },
-    { label: 'Não Contados', value: 'nao_contados' },
-  ], []);
+  const getSituacaoColor = () => {
+    switch (situacao) {
+      case 'OK': return colors.success;
+      case 'SOBRA': return colors.warning;
+      case 'FALTA': return colors.danger;
+      default: return colors.gray;
+    }
+  };
 
-  const itensFiltrados = useMemo(() => {
-    if (!itensAlmoxarifado.length || !relatorio) return [];
+  const toggleFiltro = (valor) => {
+    setFiltroStatus(prev => prev === valor ? null : valor);
+  };
 
-    return itensAlmoxarifado.filter(produto => {
-      const itemContado = relatorio.itens.some(i => i.codigo === produto.cod);
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    setTimeout(() => setRefreshing(false), 500);
+  }, []);
 
-      if (selectedCategoria === 'contados') return itemContado;
-      if (selectedCategoria === 'nao_contados') return !itemContado;
-      return true;
-    });
-  }, [itensAlmoxarifado, relatorio, selectedCategoria]);
+  const renderItem = useCallback(({ item }) => {
+    const contado = itensMapRef.current.has(item.cod);
+    const itemContado = contado ? relatorio.itens.find(i => i.codigo === item.cod) : null;
+    
+    return (
+      <ItemCard
+        produto={item}
+        contado={contado}
+        onPress={() => handleContarItem(item)}
+        onEdit={() => handleEditarItem(itemContado)}
+        onDelete={() => handleRemoverItem(item, itemContado)}
+      />
+    );
+  }, [relatorio]);
 
-  // Loading state
+  const keyExtractor = useCallback((item) => item.cod, []);
+
+  const getItemLayout = useCallback((data, index) => ({
+    length: 120,
+    offset: 120 * index,
+    index,
+  }), []);
+
+  const ListHeaderComponent = useCallback(() => (
+    <>
+      {/* Card de informações */}
+      <Card>
+        <View style={styles.cardContent}>
+          <View style={styles.infoContainer}>
+            {editandoTitulo ? (
+              <View style={styles.editTituloContainer}>
+                <TextInput
+                  style={styles.editTituloInput}
+                  value={novoTitulo}
+                  onChangeText={setNovoTitulo}
+                  placeholder="Título do relatório"
+                />
+                <View style={styles.editTituloButtons}>
+                  <TouchableOpacity onPress={handleSalvarTitulo} style={styles.editTituloButton}>
+                    <Ionicons name="checkmark" size={20} color={colors.success} />
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => setEditandoTitulo(false)} style={styles.editTituloButton}>
+                    <Ionicons name="close" size={20} color={colors.danger} />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : (
+              <Text style={styles.titulo}>{relatorio.titulo}</Text>
+            )}
+
+            <Text style={styles.subtitulo}>
+              {relatorio.almoxarifado} • {relatorio.inventariante}
+            </Text>
+            <Text style={styles.statusText}>
+              Status:{' '}
+              <Text style={{ color: relatorio.status === 'em_andamento' ? colors.accent : colors.gray }}>
+                {relatorio.status === 'em_andamento' ? 'Em andamento' : 'Arquivado'}
+              </Text>
+            </Text>
+            <Text style={styles.data}>
+              Criado em: {relatorio.dataCriacao}
+            </Text>
+          </View>
+
+          {/* Ícones verticais */}
+          <View style={styles.verticalIcons}>
+            <TouchableOpacity style={styles.iconButton} onPress={() => setEditandoTitulo(true)}>
+              <Ionicons name="create-outline" size={22} color={colors.primary} />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.iconButton} onPress={() => setModalExportVisible(true)}>
+              <Ionicons name="download-outline" size={22} color={colors.primary} />
+            </TouchableOpacity>
+            {relatorio.status === 'em_andamento' ? (
+              <TouchableOpacity style={styles.iconButton} onPress={() => arquivarRelatorio(relatorio.id)}>
+                <Ionicons name="archive-outline" size={22} color={colors.primary} />
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity style={styles.iconButton} onPress={() => desarquivarRelatorio(relatorio.id)}>
+                <Ionicons name="refresh-outline" size={22} color={colors.success} />
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity style={[styles.iconButton, styles.excluirIcon]} onPress={() => excluirRelatorio(relatorio.id)}>
+              <Ionicons name="trash-outline" size={22} color={colors.danger} />
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* Barra de Pesquisa */}
+        {itensAlmoxarifado.length > 0 && (
+          <View style={styles.pesquisaContainer}>
+            <View style={styles.pesquisaInputWrapper}>
+              <Ionicons name="search-outline" size={18} color={colors.gray} style={styles.pesquisaIcon} />
+              <TextInput
+                style={styles.pesquisaInput}
+                placeholder="Pesquisar por código ou item..."
+                placeholderTextColor={colors.lightGray}
+                value={pesquisaTexto}
+                onChangeText={setPesquisaTexto}
+              />
+              {pesquisaTexto.length > 0 && (
+                <TouchableOpacity onPress={() => setPesquisaTexto('')} style={styles.pesquisaLimpar}>
+                  <Ionicons name="close-circle" size={16} color={colors.gray} />
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        )}
+
+        {/* Filtros */}
+        {itensAlmoxarifado.length > 0 && (
+          <View style={styles.filtrosContainer}>
+            <Text style={styles.filtrosLabel}>Filtrar:</Text>
+            <View style={styles.filtrosRow}>
+              <TouchableOpacity
+                style={[styles.filtroChip, filtroStatus === true && styles.filtroChipAtivo]}
+                onPress={() => toggleFiltro(true)}
+              >
+                <Text style={[styles.filtroChipText, filtroStatus === true && styles.filtroChipTextAtivo]}>
+                  Contados
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.filtroChip, filtroStatus === false && styles.filtroChipAtivo]}
+                onPress={() => toggleFiltro(false)}
+              >
+                <Text style={[styles.filtroChipText, filtroStatus === false && styles.filtroChipTextAtivo]}>
+                  Não Contados
+                </Text>
+              </TouchableOpacity>
+              {filtroStatus !== null && (
+                <TouchableOpacity style={styles.filtroLimpar} onPress={() => setFiltroStatus(null)}>
+                  <Ionicons name="close-circle" size={18} color={colors.gray} />
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        )}
+      </Card>
+
+      <Text style={styles.listaTitle}>
+        ITENS DO ALMOXARIFADO 
+        {filtroStatus !== null && (
+          <Text style={styles.listaSubtitle}>
+            {' '}({filtroStatus === true ? 'Contados' : 'Não Contados'})
+          </Text>
+        )}
+        {pesquisaTexto.length > 0 && (
+          <Text style={styles.listaSubtitle}>
+            {' '}• Pesquisa: "{pesquisaTexto}"
+          </Text>
+        )}
+      </Text>
+    </>
+  ), [relatorio, editandoTitulo, novoTitulo, itensAlmoxarifado, filtroStatus, pesquisaTexto]);
+
+  const ListEmptyComponent = useCallback(() => (
+    <Card>
+      <View style={styles.emptyContainer}>
+        <Ionicons name="cube-outline" size={48} color={colors.lightGray} />
+        <Text style={styles.emptyText}>
+          {pesquisaTexto.length > 0
+            ? 'Nenhum item encontrado para a pesquisa'
+            : filtroStatus === null 
+              ? 'Nenhum item encontrado' 
+              : filtroStatus === true 
+                ? 'Nenhum item contado' 
+                : 'Nenhum item não contado'}
+        </Text>
+      </View>
+    </Card>
+  ), [pesquisaTexto, filtroStatus]);
+
   if (loading || contextLoading) {
     return (
       <View style={styles.loadingContainer}>
@@ -472,12 +613,7 @@ export default function RelatorioDetalheScreen() {
       <View style={styles.loadingContainer}>
         <Ionicons name="alert-circle-outline" size={48} color={colors.danger} />
         <Text style={styles.errorText}>Relatório não encontrado</Text>
-        <Button
-          title="Voltar"
-          variant="primary"
-          onPress={handleVoltar}
-          style={styles.errorButton}
-        />
+        <Button title="Voltar" variant="primary" onPress={handleVoltar} style={styles.errorButton} />
       </View>
     );
   }
@@ -494,257 +630,27 @@ export default function RelatorioDetalheScreen() {
           ),
         }}
       />
-      <ScrollView
-        style={styles.container}
-        showsVerticalScrollIndicator={false}
-        removeClippedSubviews={true}
-      >
-        {/* Card de informações com ícones verticais */}
-        <Card>
-          <View style={styles.cardContent}>
-            <View style={styles.infoContainer}>
-              {editandoTitulo ? (
-                <View style={styles.editTituloContainer}>
-                  <TextInput
-                    style={styles.editTituloInput}
-                    value={novoTitulo}
-                    onChangeText={setNovoTitulo}
-                    placeholder="Título do relatório"
-                  />
-                  <View style={styles.editTituloButtons}>
-                    <TouchableOpacity onPress={handleSalvarTitulo} style={styles.editTituloButton}>
-                      <Ionicons name="checkmark" size={20} color={colors.success} />
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={handleCancelarEdicao} style={styles.editTituloButton}>
-                      <Ionicons name="close" size={20} color={colors.danger} />
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              ) : (
-                <Text style={styles.titulo}>{relatorio.titulo}</Text>
-              )}
-
-              <Text style={styles.subtitulo}>
-                {relatorio.almoxarifado} • {relatorio.inventariante}
-              </Text>
-              <Text style={styles.statusText}>
-                Status:{' '}
-                <Text style={{ color: relatorio.status === 'em_andamento' ? colors.accent : colors.gray }}>
-                  {relatorio.status === 'em_andamento' ? 'Em andamento' : 'Arquivado'}
-                </Text>
-              </Text>
-              <Text style={styles.data}>
-                Criado em: {relatorio.dataCriacao}
-              </Text>
-            </View>
-
-            {/* Ícones verticais à direita */}
-            <View style={styles.verticalIcons}>
-              <TouchableOpacity
-                style={styles.iconButton}
-                onPress={handleEditarTitulo}
-              >
-                <Ionicons name="create-outline" size={22} color={colors.primary} />
-              </TouchableOpacity>
-
-              {/* BOTÃO DE DOWNLOAD (abre modal) */}
-              <TouchableOpacity
-                style={styles.iconButton}
-                onPress={() => setModalExportVisible(true)}
-              >
-                <Ionicons name="download-outline" size={22} color={colors.primary} />
-              </TouchableOpacity>
-
-              {relatorio.status === 'em_andamento' && (
-                <TouchableOpacity
-                  style={styles.iconButton}
-                  onPress={handleArquivar}
-                >
-                  <Ionicons name="archive-outline" size={22} color={colors.primary} />
-                </TouchableOpacity>
-              )}
-
-              <TouchableOpacity
-                style={[styles.iconButton, styles.excluirIcon]}
-                onPress={handleExcluir}
-              >
-                <Ionicons name="trash-outline" size={22} color={colors.danger} />
-              </TouchableOpacity>
-            </View>
-          </View>
-        </Card>
-
-        {/* Resumo */}
-        {showResumo && (
-          <Card variant="relatorio">
-            <View style={styles.resumoHeader}>
-              <Text style={styles.resumoTitle}>RESUMO</Text>
-              <TouchableOpacity onPress={() => setShowResumo(false)}>
-                <Ionicons name="chevron-up" size={20} color={colors.primary} />
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.resumoGrid}>
-              <View style={styles.resumoItem}>
-                <Text style={styles.resumoValor}>{relatorio.totalItens || 0}</Text>
-                <Text style={styles.resumoLabel}>Contados</Text>
-              </View>
-              <View style={[styles.resumoItem, { backgroundColor: colors.success + '20' }]}>
-                <Text style={styles.resumoValor}>{relatorio.resumo?.ok || 0}</Text>
-                <Text style={styles.resumoLabel}>OK</Text>
-              </View>
-              <View style={[styles.resumoItem, { backgroundColor: colors.warning + '20' }]}>
-                <Text style={styles.resumoValor}>{relatorio.resumo?.sobra || 0}</Text>
-                <Text style={styles.resumoLabel}>Sobra</Text>
-              </View>
-              <View style={[styles.resumoItem, { backgroundColor: colors.danger + '20' }]}>
-                <Text style={styles.resumoValor}>{relatorio.resumo?.falta || 0}</Text>
-                <Text style={styles.resumoLabel}>Falta</Text>
-              </View>
-            </View>
-
-            <View style={styles.progressContainer}>
-              <View style={styles.progressBar}>
-                <View
-                  style={[
-                    styles.progressFill,
-                    {
-                      width: itensAlmoxarifado.length > 0
-                        ? `${(relatorio.totalItens / itensAlmoxarifado.length) * 100}%`
-                        : '0%',
-                      backgroundColor: colors.success
-                    }
-                  ]}
-                />
-              </View>
-              <Text style={styles.progressText}>
-                {carregandoItens ? 'Carregando itens...' : `${relatorio.totalItens} de ${itensAlmoxarifado.length} itens contados`}
-              </Text>
-            </View>
-          </Card>
-        )}
-
-        {!showResumo && (
-          <TouchableOpacity
-            style={styles.showResumoButton}
-            onPress={() => setShowResumo(true)}
-          >
-            <Ionicons name="chevron-down" size={20} color={colors.primary} />
-            <Text style={styles.showResumoText}>Mostrar resumo</Text>
-          </TouchableOpacity>
-        )}
-
-        {/* Filtros - só aparecem se houver itens */}
-        {itensAlmoxarifado.length > 0 && (
-          <Card>
-            <Text style={styles.label}>Filtrar por</Text>
-            <View style={styles.filtrosRow}>
-              {categorias.map((cat) => (
-                <TouchableOpacity
-                  key={cat.value}
-                  style={[
-                    styles.filtroButton,
-                    selectedCategoria === cat.value && styles.filtroAtivo
-                  ]}
-                  onPress={() => setSelectedCategoria(cat.value)}
-                >
-                  <Text style={selectedCategoria === cat.value ? styles.filtroTextoAtivo : styles.filtroTexto}>
-                    {cat.label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </Card>
-        )}
-
-        {/* Lista de Itens do Almoxarifado */}
-        <Text style={styles.listaTitle}>ITENS DO ALMOXARIFADO</Text>
-
-        {carregandoItens ? (
-          <Card>
-            <View style={styles.loadingMoreContainer}>
-              <ActivityIndicator size="small" color={colors.primary} />
-              <Text style={styles.loadingMoreText}>Carregando itens...</Text>
-            </View>
-          </Card>
-        ) : (
-          itensFiltrados.map((produto) => {
-            const itemContado = relatorio.itens.find(i => i.codigo === produto.cod);
-            const contado = !!itemContado;
-
-            return (
-              <View key={produto.cod} style={[
-                styles.itemCard,
-                contado && styles.itemCardContado
-              ]}>
-                <View style={styles.itemHeader}>
-                  <View style={styles.itemInfo}>
-                    <Text style={styles.itemCodigo}>{produto.cod}</Text>
-                    {contado && (
-                      <View style={styles.itemContadoBadge}>
-                        <Ionicons name="checkmark-circle" size={16} color={colors.success} />
-                        <Text style={styles.itemContadoText}>Contado</Text>
-                      </View>
-                    )}
-                  </View>
-
-                  {/* BOTÕES DE AÇÃO - APARECEM EM TODOS OS ITENS */}
-                  <View style={styles.itemActions}>
-                    <TouchableOpacity
-                      onPress={() => handleEditarItem(itemContado)}
-                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                    >
-                      <Ionicons name="create-outline" size={20} color={colors.primary} />
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      onPress={() => handleRemoverItem(produto, itemContado)}  // <-- CORRIGIDO
-                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                    >
-                      <Ionicons name="trash-outline" size={20} color={colors.danger} />
-                    </TouchableOpacity>
-                  </View>
-                </View>
-
-                <Text style={styles.itemNome}>{produto.nome}</Text>
-                <Text style={styles.itemUnidade}>Unidade: {produto.unid}</Text>
-
-                {contado && (
-                  <View style={styles.itemDetalhes}>
-                    <View style={styles.itemDetalhe}>
-                      <Text style={styles.detalheLabel}>Físico:</Text>
-                      <Text style={styles.detalheValor}>
-                        {itemContado.fisico.paletes > 0 && `${itemContado.fisico.paletes} pal `}
-                        {itemContado.fisico.caixas > 0 && `${itemContado.fisico.caixas} cx `}
-                        {itemContado.fisico.unidades > 0 && `${itemContado.fisico.unidades} un`}
-                      </Text>
-                    </View>
-                    <View style={styles.itemDetalhe}>
-                      <Text style={styles.detalheLabel}>Spalm:</Text>
-                      <Text style={styles.detalheValor}>{itemContado.spalm}</Text>
-                    </View>
-                    <View style={styles.itemDetalhe}>
-                      <Text style={styles.detalheLabel}>Dif:</Text>
-                      <Text style={[
-                        styles.detalheValor,
-                        {
-                          color: (itemContado.spalm - (itemContado.fisico.paletes * 100 +
-                            itemContado.fisico.caixas * 10 + itemContado.fisico.unidades)) > 0
-                            ? colors.success : colors.danger
-                        }
-                      ]}>
-                        {itemContado.spalm - (itemContado.fisico.paletes * 100 +
-                          itemContado.fisico.caixas * 10 + itemContado.fisico.unidades)}
-                      </Text>
-                    </View>
-                  </View>
-                )}
-              </View>
-            );
-          })
-        )}
-
-        <View style={styles.bottomSpace} />
-      </ScrollView>
+      
+      <View style={styles.container}>
+        <FlatList
+          ref={listRef}
+          data={getItensFiltrados()}
+          renderItem={renderItem}
+          keyExtractor={keyExtractor}
+          ListHeaderComponent={ListHeaderComponent}
+          ListEmptyComponent={ListEmptyComponent}
+          getItemLayout={getItemLayout}
+          initialNumToRender={10}
+          maxToRenderPerBatch={10}
+          windowSize={5}
+          removeClippedSubviews={true}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          }
+          contentContainerStyle={styles.listContent}
+        />
+      </View>
 
       {/* Modal de Exportação */}
       <Modal visible={modalExportVisible} transparent animationType="fade">
@@ -752,10 +658,7 @@ export default function RelatorioDetalheScreen() {
           <View style={styles.modalExportContent}>
             <Text style={styles.modalExportTitle}>Exportar Relatório</Text>
 
-            <TouchableOpacity
-              style={styles.modalExportOption}
-              onPress={handleExportarPDF}
-            >
+            <TouchableOpacity style={styles.modalExportOption} onPress={handleExportarPDF}>
               <Ionicons name="document-text-outline" size={28} color={colors.danger} />
               <View style={styles.modalExportOptionText}>
                 <Text style={styles.modalExportOptionTitle}>PDF</Text>
@@ -763,21 +666,15 @@ export default function RelatorioDetalheScreen() {
               </View>
             </TouchableOpacity>
 
-            <TouchableOpacity
-              style={styles.modalExportOption}
-              onPress={handleExportarExcel}
-            >
+            <TouchableOpacity style={styles.modalExportOption} onPress={handleExportarExcel}>
               <Ionicons name="grid-outline" size={28} color={colors.success} />
               <View style={styles.modalExportOptionText}>
                 <Text style={styles.modalExportOptionTitle}>Excel</Text>
-                <Text style={styles.modalExportOptionDesc}>Gerar relatório em formato Excel (XLSX)</Text>
+                <Text style={styles.modalExportOptionDesc}>Gerar relatório em formato Excel</Text>
               </View>
             </TouchableOpacity>
 
-            <TouchableOpacity
-              style={styles.modalExportCancel}
-              onPress={() => setModalExportVisible(false)}
-            >
+            <TouchableOpacity style={styles.modalExportCancel} onPress={() => setModalExportVisible(false)}>
               <Text style={styles.modalExportCancelText}>Cancelar</Text>
             </TouchableOpacity>
           </View>
@@ -815,7 +712,6 @@ export default function RelatorioDetalheScreen() {
                     placeholder="0"
                   />
                 </View>
-
                 <View style={styles.modalGridItem}>
                   <Text style={styles.modalLabel}>Cx/Palete</Text>
                   <TextInput
@@ -826,7 +722,6 @@ export default function RelatorioDetalheScreen() {
                     placeholder="0"
                   />
                 </View>
-
                 <View style={styles.modalGridItem}>
                   <Text style={styles.modalLabel}>Cx Avulsas</Text>
                   <TextInput
@@ -837,7 +732,6 @@ export default function RelatorioDetalheScreen() {
                     placeholder="0"
                   />
                 </View>
-
                 <View style={styles.modalGridItem}>
                   <Text style={styles.modalLabel}>Unid/Cx</Text>
                   <TextInput
@@ -848,7 +742,6 @@ export default function RelatorioDetalheScreen() {
                     placeholder="1"
                   />
                 </View>
-
                 <View style={styles.modalGridItem}>
                   <Text style={styles.modalLabel}>Unid Avulsas</Text>
                   <TextInput
@@ -859,7 +752,6 @@ export default function RelatorioDetalheScreen() {
                     placeholder="0"
                   />
                 </View>
-
                 <View style={styles.modalGridItem}>
                   <Text style={styles.modalLabel}>Expedição</Text>
                   <TextInput
@@ -960,18 +852,26 @@ export default function RelatorioDetalheScreen() {
                 />
               )}
 
+              <Text style={styles.modalSection}>Confronto com Spalm</Text>
+              <View style={styles.modalGrid}>
+                <View style={styles.modalGridItem}>
+                  <Text style={styles.modalLabel}>Diferença</Text>
+                  <TextInput
+                    style={[styles.modalInput, { color: diferenca < 0 ? colors.danger : diferenca > 0 ? colors.warning : colors.success }]}
+                    value={diferenca.toFixed(2)}
+                    editable={false}
+                  />
+                </View>
+                <View style={styles.modalGridItemFull}>
+                  <View style={[styles.situacaoBox, { backgroundColor: getSituacaoColor() }]}>
+                    <Text style={styles.situacaoText}>{situacao}</Text>
+                  </View>
+                </View>
+              </View>
+
               <View style={styles.modalButtons}>
-                <Button
-                  title="Cancelar"
-                  variant="outline"
-                  onPress={() => setModalVisible(false)}
-                  style={styles.modalButton}
-                />
-                <Button
-                  title="Salvar"
-                  onPress={salvarItem}
-                  style={styles.modalButton}
-                />
+                <Button title="Cancelar" variant="outline" onPress={() => setModalVisible(false)} style={styles.modalButton} />
+                <Button title="Salvar" onPress={salvarItem} style={styles.modalButton} />
               </View>
             </ScrollView>
           </View>
@@ -985,14 +885,12 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.bg,
-    padding: 12,
   },
   loadingContainer: {
     flex: 1,
-    backgroundColor: colors.bg,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 20,
+    backgroundColor: colors.bg,
   },
   loadingText: {
     marginTop: 12,
@@ -1010,6 +908,12 @@ const styles = StyleSheet.create({
     marginTop: 20,
     minWidth: 120,
   },
+  listContent: {
+    padding: 12,
+    paddingBottom: 20,
+  },
+  
+  // Card de informações
   cardContent: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1079,123 +983,96 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     backgroundColor: colors.lighterGray,
   },
-  resumoHeader: {
+  
+  // Pesquisa
+  pesquisaContainer: {
+    marginTop: 16,
+    paddingHorizontal: 4,
+  },
+  pesquisaInputWrapper: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 12,
-  },
-  resumoTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: colors.primary,
-    textTransform: 'uppercase',
-  },
-  resumoGrid: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 8,
-    marginBottom: 12,
-  },
-  resumoItem: {
-    flex: 1,
-    backgroundColor: colors.lighterGray,
-    padding: 10,
-    borderRadius: 8,
-    alignItems: 'center',
-    borderWidth: 1,
+    borderWidth: 2,
     borderColor: colors.lightGray,
-  },
-  resumoValor: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: colors.primary,
-  },
-  resumoLabel: {
-    fontSize: 10,
-    color: colors.gray,
-    marginTop: 2,
-  },
-  progressContainer: {
-    marginTop: 8,
-  },
-  progressBar: {
-    height: 8,
-    backgroundColor: colors.lightGray,
-    borderRadius: 4,
-    overflow: 'hidden',
-  },
-  progressFill: {
-    height: '100%',
-    borderRadius: 4,
-  },
-  progressText: {
-    fontSize: 12,
-    color: colors.gray,
-    marginTop: 4,
-    textAlign: 'center',
-  },
-  showResumoButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 8,
+    borderRadius: 10,
     backgroundColor: colors.white,
-    borderRadius: 8,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: colors.lightGray,
+    paddingHorizontal: 10,
   },
-  showResumoText: {
+  pesquisaIcon: {
+    marginRight: 8,
+  },
+  pesquisaInput: {
+    flex: 1,
+    height: 45,
+    fontSize: 14,
+    color: colors.text,
+  },
+  pesquisaLimpar: {
+    padding: 6,
+  },
+  
+  // Filtros
+  filtrosContainer: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: colors.lightGray,
+  },
+  filtrosLabel: {
     fontSize: 12,
-    color: colors.primary,
-    marginLeft: 4,
     fontWeight: '600',
-  },
-  label: {
-    fontSize: 11,
-    fontWeight: '700',
     color: colors.gray,
     marginBottom: 8,
     textTransform: 'uppercase',
   },
   filtrosRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
+    alignItems: 'center',
     gap: 8,
   },
-  filtroButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+  filtroChip: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
     borderRadius: 20,
     backgroundColor: colors.white,
     borderWidth: 2,
     borderColor: colors.lightGray,
   },
-  filtroAtivo: {
+  filtroChipAtivo: {
     backgroundColor: colors.primary,
     borderColor: colors.primary,
   },
-  filtroTexto: {
-    color: colors.gray,
-    fontSize: 12,
+  filtroChipText: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: colors.text,
   },
-  filtroTextoAtivo: {
+  filtroChipTextAtivo: {
     color: colors.white,
-    fontSize: 12,
-    fontWeight: '600',
   },
+  filtroLimpar: {
+    padding: 4,
+  },
+  
+  // Lista
   listaTitle: {
     fontSize: 16,
     fontWeight: '700',
     color: colors.primary,
     marginTop: 16,
     marginBottom: 8,
+    paddingHorizontal: 12,
+  },
+  listaSubtitle: {
+    fontSize: 14,
+    fontWeight: '400',
+    color: colors.gray,
   },
   itemCard: {
     backgroundColor: colors.white,
     borderRadius: 12,
     padding: 12,
+    marginHorizontal: 12,
     marginBottom: 8,
     borderWidth: 2,
     borderColor: colors.lightGray,
@@ -1247,41 +1124,35 @@ const styles = StyleSheet.create({
   itemUnidade: {
     fontSize: 12,
     color: colors.gray,
-    marginBottom: 8,
   },
-  itemDetalhes: {
-    backgroundColor: colors.lighterGray,
-    padding: 8,
-    borderRadius: 8,
-    gap: 4,
+  
+  // Empty
+  emptyContainer: {
+    alignItems: 'center',
+    padding: 32,
   },
-  itemDetalhe: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  detalheLabel: {
-    fontSize: 12,
+  emptyText: {
+    fontSize: 14,
     color: colors.gray,
+    textAlign: 'center',
+    marginTop: 8,
   },
-  detalheValor: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: colors.text,
-  },
-  bottomSpace: {
-    height: 30,
-  },
+  
+  // Modal Overlay
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'flex-end',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
+  
+  // Modal de Contagem
   modalContent: {
     backgroundColor: colors.white,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    borderRadius: 20,
     padding: 20,
-    maxHeight: '90%',
+    width: '90%',
+    maxHeight: '80%',
   },
   modalHeader: {
     flexDirection: 'row',
@@ -1323,6 +1194,11 @@ const styles = StyleSheet.create({
   },
   modalGridItem: {
     width: '33.33%',
+    paddingHorizontal: 4,
+    marginBottom: 8,
+  },
+  modalGridItemFull: {
+    width: '100%',
     paddingHorizontal: 4,
     marginBottom: 8,
   },
@@ -1400,6 +1276,19 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
     marginBottom: 8,
   },
+  situacaoBox: {
+    padding: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+  },
+  situacaoText: {
+    color: colors.white,
+    fontWeight: 'bold',
+    fontSize: 16,
+    textTransform: 'uppercase',
+  },
   modalButtons: {
     flexDirection: 'row',
     gap: 12,
@@ -1409,17 +1298,8 @@ const styles = StyleSheet.create({
   modalButton: {
     flex: 1,
   },
-  loadingMoreContainer: {
-    padding: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
-    gap: 8,
-  },
-  loadingMoreText: {
-    fontSize: 14,
-    color: colors.gray,
-  },
+  
+  // Modal de Exportação
   modalExportContent: {
     backgroundColor: colors.white,
     borderRadius: 20,

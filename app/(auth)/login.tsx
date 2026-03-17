@@ -3,13 +3,13 @@ import { Ionicons } from '@expo/vector-icons';
 import { Link, useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import {
-    KeyboardAvoidingView,
-    Platform,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 
 import Button from '../../components/Button';
@@ -50,7 +50,7 @@ export default function LoginScreen() {
     const success = await signIn(email, password);
     
     if (success) {
-      router.replace('/(tabs)/contagem');
+      router.replace('/(tabs)/relatorios');
     }
   };
 

@@ -1,8 +1,20 @@
-// data/produtos.ts
+const { initializeApp } = require('firebase/app');
+const { getDatabase, ref, set } = require('firebase/database');
 
-export const produtos = [
-        // CENTRAL
-    { almox: "Almoxarifado Central", cod: "03.22.01.0006-6", nome: "AÇÚCAR REFINADO 1Kg", unid: "QUILOGRAMA" },
+// IMPORTANTE: Substitua pelos seus dados reais do Firebase
+const firebaseConfig = {
+  apiKey: "AIzaSyCWJaw3dgQ9G3dlvYAmd-PfCyf6CucUaOY",
+  authDomain: "acheck-7a0fc.firebaseapp.com",
+  databaseURL: "https://acheck-mobile-default-rtdb.firebaseio.com",
+  projectId: "acheck-7a0fc",
+  storageBucket: "acheck-7a0fc.firebasestorage.app",
+  messagingSenderId: "223014659850",
+  appId: "1:223014659850:web:194b2b31bc889752db7cf3"
+};
+
+// Seus produtos - copie do arquivo produtos.ts
+const produtos = [
+  { almox: "Almoxarifado Central", cod: "03.22.01.0006-6", nome: "AÇÚCAR REFINADO 1Kg", unid: "QUILOGRAMA" },
     { almox: "Almoxarifado Central", cod: "03.31.01.0210-6", nome: "AÇUCAREIRO DE AÇO INOXIDÁVEL - UNIDADE", unid: "UNIDADE" },
     { almox: "Almoxarifado Central", cod: "03.44.02.0044-2", nome: "ADESIVO MONOMÉRICO (BRANCO)", unid: "UNIDADE" },
     { almox: "Almoxarifado Central", cod: "03.44.02.0042-6", nome: "ADESIVO MONOMÉRICO (DOURADO)", unid: "UNIDADE" },
@@ -3206,28 +3218,63 @@ export const produtos = [
     { almox: "SAPF Papéis", cod: "03.75.15.9002-1", nome: "PAPELÃO 25 80X100CM CINZA (FARDO COM 25 UNIDADES) ", unid: "FOLHA" },
 ];
 
-export const getProdutosByAlmox = (almoxarifado: string) => {
-  return produtos.filter(p => p.almox === almoxarifado);
-};
-
-export const getProdutoByCodigo = (codigo: string, almoxarifado?: string) => {
-  const filtrados = produtos.filter(p => p.cod === codigo);
-  if (almoxarifado) {
-    return filtrados.find(p => p.almox === almoxarifado);
-  }
-  return filtrados[0];
-};
-
-export const searchProdutos = (termo: string, almoxarifado?: string) => {
-  const termoUpper = termo.toUpperCase();
-  let filtrados = produtos.filter(p => 
-    p.cod.toUpperCase().includes(termoUpper) || 
-    p.nome.toUpperCase().includes(termoUpper)
-  );
+async function atualizarProdutos() {
+  console.log('🚀 Iniciando atualização dos produtos...');
+  console.log(`📦 Total de produtos: ${produtos.length}`);
   
-  if (almoxarifado) {
-    filtrados = filtrados.filter(p => p.almox === almoxarifado);
+  try {
+    // Inicializar Firebase
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+    
+    // Preparar dados
+    const produtosObject = {};
+    const produtosPorAlmox = {};
+    
+    produtos.forEach((produto) => {
+      const key = produto.cod.replace(/[^a-zA-Z0-9]/g, '_');
+      
+      const produtoData = {
+        ...produto,
+        id: key,
+        updatedAt: new Date().toISOString()
+      };
+      
+      produtosObject[key] = produtoData;
+      
+      const almoxKey = produto.almox
+        .replace(/[^a-zA-Z0-9]/g, '_')
+        .toLowerCase();
+      
+      if (!produtosPorAlmox[almoxKey]) {
+        produtosPorAlmox[almoxKey] = {};
+      }
+      produtosPorAlmox[almoxKey][key] = produtoData;
+    });
+
+    console.log('📤 Enviando para o Firebase...');
+    
+    // Salvar
+    await set(ref(db, 'produtos'), produtosObject);
+    console.log('✅ /produtos atualizado');
+    
+    await set(ref(db, 'produtosPorAlmox'), produtosPorAlmox);
+    console.log('✅ /produtosPorAlmox atualizado');
+    
+    const produtosList = produtos.map(p => ({
+      ...p,
+      id: p.cod.replace(/[^a-zA-Z0-9]/g, '_')
+    }));
+    await set(ref(db, 'produtosList'), produtosList);
+    console.log('✅ /produtosList atualizado');
+    
+    console.log('\n🎉 Concluído!');
+    process.exit(0);
+    
+  } catch (error) {
+    console.error('\n❌ Erro:', error);
+    process.exit(1);
   }
-  
-  return filtrados;
-};
+}
+
+atualizarProdutos();

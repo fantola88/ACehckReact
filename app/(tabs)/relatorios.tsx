@@ -82,7 +82,7 @@ export default function RelatoriosScreen() {
       }
       
       if (avisosVisuais) {
-        Alert.alert('Sucesso', 'Relatório criado com sucesso!');
+        Alert.alert('Sucesso', 'Inventário criado com sucesso!');
       }
       
       setModalVisible(false);
@@ -96,7 +96,7 @@ export default function RelatoriosScreen() {
         await playErrorSound();
       }
       if (avisosVisuais) {
-        Alert.alert('Erro', 'Não foi possível criar o relatório');
+        Alert.alert('Erro', 'Não foi possível criar o inventário');
       }
     }
   };
@@ -162,19 +162,19 @@ export default function RelatoriosScreen() {
 
   return (
     <>
-      <Stack.Screen options={{ title: 'Relatórios' }} />
+      <Stack.Screen options={{ title: 'Inventários' }} />
       <ScrollView
         style={styles.container}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
-        {/* Botão Novo Relatório */}
+        {/* Botão Novo Inventário */}
         <Card>
           <TouchableOpacity
             style={styles.novoButton}
             onPress={() => setModalVisible(true)}
           >
             <Ionicons name="add-circle" size={24} color={colors.white} />
-            <Text style={styles.novoButtonText}>NOVO RELATÓRIO</Text>
+            <Text style={styles.novoButtonText}>NOVO INVENTÁRIO</Text>
           </TouchableOpacity>
         </Card>
 
@@ -214,9 +214,9 @@ export default function RelatoriosScreen() {
           <Card>
             <View style={styles.emptyContainer}>
               <Ionicons name="document-text-outline" size={80} color={colors.lightGray} />
-              <Text style={styles.emptyTitle}>Nenhum relatório encontrado</Text>
+              <Text style={styles.emptyTitle}>Nenhum inventário encontrado</Text>
               <Text style={styles.emptyText}>
-                Clique em "NOVO RELATÓRIO" para começar
+                Clique em "NOVO INVENTÁRIO" para começar
               </Text>
             </View>
           </Card>
@@ -272,8 +272,8 @@ export default function RelatoriosScreen() {
                       style={styles.acaoButton}
                       onPress={() => {
                         Alert.alert(
-                          'Duplicar Relatório',
-                          'Digite o título do novo relatório',
+                          'Duplicar Inventário',
+                          'Digite o título do novo inventário',
                           [
                             { text: 'Cancelar', style: 'cancel' },
                             {
@@ -311,15 +311,22 @@ export default function RelatoriosScreen() {
         <View style={styles.bottomSpace} />
       </ScrollView>
 
-      {/* Modal Novo Relatório */}
+      {/* Modal Novo Inventário */}
       <Modal visible={modalVisible} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Novo Relatório</Text>
+            <Text style={styles.modalTitle}>Novo Inventário</Text>
 
             <Text style={styles.modalLabel}>Almoxarifado</Text>
             <View style={styles.modalPicker}>
-              {['Almoxarifado Central', 'Almoxarifado de Alimentícios', 'Almoxarifado do Serviço Médico', 'Almoxarifado de Informática', 'Almoxarifado de Produtos Gráficos'].map((item) => (
+              {[
+                'Almoxarifado Central', 
+                'Almoxarifado de Alimentícios', 
+                'Almoxarifado do Serviço Médico', 
+                'Almoxarifado de Informática', 
+                'Almoxarifado de Produtos Gráficos',
+                'Almoxarifado SAPF Papéis'
+              ].map((item) => (
                 <TouchableOpacity
                   key={item}
                   style={[

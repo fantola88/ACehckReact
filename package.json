@@ -8,7 +8,10 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "seed:produtos": "node scripts/atualizarProdutosFirebase.js",
+    "seed:produtos:backup": "node scripts/atualizarProdutosComBackup.js",
+    "seed:produtos:update": "node scripts/atualizarProdutosIncremental.js"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.1.1",
@@ -54,9 +57,11 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@types/node": "^25.5.0",
     "@types/react": "~19.1.0",
     "eslint": "^9.25.0",
     "eslint-config-expo": "~10.0.0",
+    "ts-node": "^10.9.2",
     "typescript": "~5.9.2"
   },
   "private": true

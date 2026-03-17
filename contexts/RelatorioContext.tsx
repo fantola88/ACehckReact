@@ -15,7 +15,7 @@ import { Alert } from 'react-native';
 import { db } from '../config/firebase';
 import type { ItemInventario, Relatorio } from '../data/types';
 import { calcularResumo } from '../utils/calculos';
-import { AuthContext } from './AuthContext'; // Importação correta
+import { AuthContext } from './AuthContext';
 
 interface RelatorioContextData {
   relatorios: Relatorio[];
@@ -27,8 +27,8 @@ interface RelatorioContextData {
   updateItem: (relatorioId: string, itemId: string, item: Partial<ItemInventario>) => Promise<void>;
   removeItem: (relatorioId: string, itemId: string) => Promise<void>;
   criarRelatorio: (titulo: string, almoxarifado: string, inventariante: string) => Promise<string>;
-  // finalizarRelatorio REMOVIDO
   arquivarRelatorio: (relatorioId: string) => Promise<void>;
+  desarquivarRelatorio: (relatorioId: string) => Promise<void>; // NOVA FUNÇÃO
   excluirRelatorio: (relatorioId: string) => Promise<void>;
   duplicarRelatorio: (relatorioId: string, novoTitulo: string) => Promise<string>;
   getResumo: (relatorioId: string) => {
@@ -60,7 +60,7 @@ export const RelatorioProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [error, setError] = useState<string | null>(null);
   const [relatorioAtivo, setRelatorioAtivo] = useState<Relatorio | null>(null);
   
-  const { user } = useContext(AuthContext); // Usando AuthContext
+  const { user } = useContext(AuthContext);
   const unsubscribeRef = useRef<(() => void) | null>(null);
 
   // Configurar listener para TODOS os relatórios
@@ -163,8 +163,6 @@ export const RelatorioProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     return docRef.id;
   };
 
-  // FUNÇÃO finalizarRelatorio REMOVIDA
-
   const arquivarRelatorio = async (relatorioId: string) => {
     if (!podeEditar(relatorioId)) {
       Alert.alert('Erro', 'Você não tem permissão para arquivar este relatório');
@@ -179,6 +177,24 @@ export const RelatorioProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     } catch (error) {
       console.error('Erro ao arquivar:', error);
       Alert.alert('Erro', 'Não foi possível arquivar');
+    }
+  };
+
+  // NOVA FUNÇÃO: Desarquivar relatório
+  const desarquivarRelatorio = async (relatorioId: string) => {
+    if (!podeEditar(relatorioId)) {
+      Alert.alert('Erro', 'Você não tem permissão para desarquivar este relatório');
+      return;
+    }
+
+    try {
+      await updateDoc(doc(db, 'relatorios', relatorioId), {
+        status: 'em_andamento',
+        updatedAt: Timestamp.now(),
+      });
+    } catch (error) {
+      console.error('Erro ao desarquivar:', error);
+      Alert.alert('Erro', 'Não foi possível desarquivar');
     }
   };
 
@@ -338,8 +354,8 @@ export const RelatorioProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         updateItem,
         removeItem,
         criarRelatorio,
-        // finalizarRelatorio REMOVIDO
         arquivarRelatorio,
+        desarquivarRelatorio, // ADICIONADO
         excluirRelatorio,
         duplicarRelatorio,
         getResumo,

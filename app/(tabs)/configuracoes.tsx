@@ -1,7 +1,7 @@
 // app/(tabs)/configuracoes.tsx
 import { Ionicons } from '@expo/vector-icons';
 import { Stack, useRouter } from 'expo-router';
-import React, { useState } from 'react';
+import React from 'react';
 import {
   Alert,
   ScrollView,
@@ -14,12 +14,10 @@ import {
 
 // Componentes
 import Card from '../../components/Card';
-import ModalInventariante from '../../components/ModalInventariante';
 
 // Contexts e Hooks
 import { useAuth } from '../../contexts/AuthContext';
-import { useInventariantes } from '../../contexts/InventariantesContext';
-import { usePreferencias } from '../../contexts/PreferenciasContext'; // <-- IMPORTAR O CONTEXTO
+import { usePreferencias } from '../../contexts/PreferenciasContext';
 import { useRelatorio } from '../../contexts/RelatorioContext';
 
 // Utils
@@ -27,7 +25,6 @@ import { colors } from '../../styles/colors';
 
 export default function ConfiguracoesScreen() {
   const router = useRouter();
-  const { inventariantes, refreshInventariantes } = useInventariantes();
   const { relatorios } = useRelatorio();
   const { user, logout } = useAuth();
   
@@ -38,9 +35,6 @@ export default function ConfiguracoesScreen() {
     setEfeitosSonoros, 
     setAvisosVisuais 
   } = usePreferencias();
-
-  const [showInventarianteModal, setShowInventarianteModal] = useState(false);
-  const [formulaCalculo, setFormulaCalculo] = useState('Paletes (100 un)');
 
   // Estatísticas calculadas
   const totalRelatorios = relatorios.length;
@@ -88,27 +82,6 @@ export default function ConfiguracoesScreen() {
           </View>
         </Card>
 
-        {/* INVENTARIANTES */}
-        <Card>
-          <TouchableOpacity 
-            style={styles.menuItem}
-            onPress={() => setShowInventarianteModal(true)}
-          >
-            <View style={styles.menuItemLeft}>
-              <View style={[styles.iconBg, { backgroundColor: colors.primary + '20' }]}>
-                <Ionicons name="people" size={22} color={colors.primary} />
-              </View>
-              <View>
-                <Text style={styles.menuItemTitle}>Inventariantes</Text>
-                <Text style={styles.menuItemSubtitle}>
-                  {inventariantes.length} cadastrados
-                </Text>
-              </View>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color={colors.gray} />
-          </TouchableOpacity>
-        </Card>
-
         {/* PREFERÊNCIAS */}
         <Card>
           <Text style={styles.sectionTitle}>PREFERÊNCIAS</Text>
@@ -128,7 +101,7 @@ export default function ConfiguracoesScreen() {
             </View>
             <Switch
               value={efeitosSonoros}
-              onValueChange={setEfeitosSonoros} // <-- USA A FUNÇÃO DO CONTEXTO
+              onValueChange={setEfeitosSonoros}
               trackColor={{ false: colors.lightGray, true: colors.accent }}
               thumbColor={colors.white}
             />
@@ -149,7 +122,7 @@ export default function ConfiguracoesScreen() {
             </View>
             <Switch
               value={avisosVisuais}
-              onValueChange={setAvisosVisuais} // <-- USA A FUNÇÃO DO CONTEXTO
+              onValueChange={setAvisosVisuais}
               trackColor={{ false: colors.lightGray, true: colors.success }}
               thumbColor={colors.white}
             />
@@ -164,15 +137,6 @@ export default function ConfiguracoesScreen() {
 
         <View style={styles.bottomSpace} />
       </ScrollView>
-
-      {/* Modal de Inventariantes */}
-      <ModalInventariante
-        visible={showInventarianteModal}
-        onClose={() => {
-          setShowInventarianteModal(false);
-          refreshInventariantes();
-        }}
-      />
     </>
   );
 }
@@ -222,40 +186,6 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
-  menuItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.lightGray,
-  },
-  menuItemLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  iconBg: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  menuItemTitle: {
-    fontSize: 15,
-    color: colors.text,
-    fontWeight: '500',
-  },
-  menuItemSubtitle: {
-    fontSize: 12,
-    color: colors.gray,
-    marginTop: 2,
-  },
-  menuItemValue: {
-    fontSize: 13,
-    color: colors.gray,
-  },
   settingRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -270,6 +200,13 @@ const styles = StyleSheet.create({
     gap: 12,
     flex: 1,
   },
+  iconBg: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   settingTitle: {
     fontSize: 15,
     color: colors.text,
@@ -279,42 +216,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.gray,
     marginTop: 2,
-  },
-  statsGrid: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    marginBottom: 16,
-  },
-  statCard: {
-    alignItems: 'center',
-    gap: 4,
-  },
-  statNumber: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: colors.text,
-    marginTop: 4,
-  },
-  statLabel: {
-    fontSize: 11,
-    color: colors.gray,
-  },
-  totalItensCard: {
-    backgroundColor: colors.lighterGray,
-    padding: 16,
-    borderRadius: 12,
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  totalItensLabel: {
-    fontSize: 13,
-    color: colors.gray,
-    marginBottom: 4,
-  },
-  totalItensValue: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: colors.primary,
   },
   logoutButton: {
     flexDirection: 'row',
@@ -336,4 +237,4 @@ const styles = StyleSheet.create({
   bottomSpace: {
     height: 30,
   },
-});
+}); 
